@@ -1,9 +1,6 @@
-export enum Microservices {
-  ORDER_SERVICE = 'orders',
-  PRODUCT_SERVICE = 'products',
-}
+export const NATS_SERVICE = 'NATS_SERVICE';
 
-export enum OrderTCP {
+export enum Orders {
   CREATE = 'CREATE_ORDER',
   FIND_ALL = 'FIND_ALL_ORDERS',
   FIND_ALL_BY_STATUS = 'FIND_ALL_ORDERS_BY_STATUS',
@@ -11,6 +8,6 @@ export enum OrderTCP {
   CHANGE_ORDER_STATUS = 'CHANGE_ORDER_STATUS',
 }
 
-export enum ProductTCP {
+export enum Products {
   VALIDATE_PRODUCTS = 'VALIDATE_PRODUCTS',
 }
