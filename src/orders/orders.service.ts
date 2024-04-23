@@ -7,19 +7,19 @@ import {
 } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { PrismaClient } from '@prisma/client';
+import { firstValueFrom } from 'rxjs';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderPaginationDto } from './dto/order-pagination.dto';
 import { ChangeOrderDto } from './dto/changeOrder.dto';
-import { Microservices, ProductTCP } from '../common/constants';
-import { firstValueFrom } from 'rxjs';
+import { NATS_SERVICE, Products } from '../common/constants';
 
 @Injectable()
 export class OrdersService extends PrismaClient implements OnModuleInit {
   private readonly logger = new Logger('OrdersService');
 
-  @Inject(Microservices.PRODUCT_SERVICE)
-  private readonly productClient: ClientProxy;
+  @Inject(NATS_SERVICE)
+  private readonly client: ClientProxy;
 
   onModuleInit() {
     this.$connect();
@@ -182,7 +182,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
     //Convertir el observable en promesa
     const products: any[] = await firstValueFrom(
       //Buscar y validar productos en el microservico de productos
-      this.productClient.send(ProductTCP.VALIDATE_PRODUCTS, ids),
+      this.client.send(Products.VALIDATE_PRODUCTS, ids),
     );
     return products;
   }
