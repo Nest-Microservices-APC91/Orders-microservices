@@ -4,6 +4,7 @@ import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 
 import { AppModule } from './app.module';
 import { envs } from './config';
+import { RpcCustomExceptionFilter } from './common/exceptions/rpc-custom-exception.filter';
 
 async function bootstrap() {
   const logger = new Logger('Main');
@@ -16,6 +17,8 @@ async function bootstrap() {
       },
     },
   );
+
+  app.useGlobalFilters(new RpcCustomExceptionFilter());
 
   app.useGlobalPipes(
     new ValidationPipe({

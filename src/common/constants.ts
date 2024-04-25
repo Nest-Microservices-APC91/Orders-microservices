@@ -11,3 +11,8 @@ export enum Orders {
 export enum Products {
   VALIDATE_PRODUCTS = 'VALIDATE_PRODUCTS',
 }
+
+export enum Payments {
+  CREATE_PAYMENT_SESSION = 'create.payment.session',
+  PAYMENT_SUCCEEDED = 'payment.succeeded',
+}
