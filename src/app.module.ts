@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { OrdersModule } from './orders/orders.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { envs } from './config/envs';
 
 @Module({
   controllers: [],
@@ -8,13 +9,15 @@ import { TypeOrmModule } from '@nestjs/typeorm';
   imports: [
     TypeOrmModule.forRoot({
       type: 'postgres',
-      host: process.env.DB_HOST,
-      port: +process.env.BD_PORT,
-      database: process.env.DB_NAME,
-      username: process.env.DB_USERNAME,
-      password: process.env.DB_PASSWORD,
+      url: envs.dbUrl,
       autoLoadEntities: true,
       synchronize: true,
+      ssl: true,
+      /*  extra: {
+        ssl: {
+          rejectUnauthorized: false,    no en production
+        }
+      } */
     }),
 
     OrdersModule,
