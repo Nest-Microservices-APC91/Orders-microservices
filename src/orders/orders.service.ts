@@ -1,12 +1,7 @@
-import {
-  HttpStatus,
-  Inject,
-  Injectable,
-  Logger,
-  OnModuleInit,
-} from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { PrismaClient } from '@prisma/client';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { firstValueFrom } from 'rxjs';
 
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -15,21 +10,30 @@ import { ChangeOrderDto } from './dto/changeOrder.dto';
 import { NATS_SERVICE, Payments, Products } from '../common/constants';
 import { OrderWithProducts } from './interfaces/order-with-products.interface';
 import { PaidOrderDto } from './dto/paid-order.dto';
+import { Order, OrderItem, OrderReceipt } from './entities';
+import { OrderStatus } from './interfaces/order-status.enum';
 
 @Injectable()
-export class OrdersService extends PrismaClient implements OnModuleInit {
+export class OrdersService {
   private readonly logger = new Logger('OrdersService');
 
-  @Inject(NATS_SERVICE)
-  private readonly client: ClientProxy;
+  constructor(
+    @Inject(NATS_SERVICE)
+    private readonly client: ClientProxy,
 
-  onModuleInit() {
-    this.$connect();
-    this.logger.log('Database connected');
-  }
+    @InjectRepository(Order)
+    private readonly orderRepository: Repository<Order>,
+
+    @InjectRepository(OrderItem)
+    private readonly orderItemRepository: Repository<OrderItem>,
+
+    @InjectRepository(OrderReceipt)
+    private readonly orderReceiptRepository: Repository<OrderReceipt>,
+  ) {}
 
   async create({ items }: CreateOrderDto) {
     const productsIds = items.map((item) => item.productId);
+    let orderItems: OrderItem[] = [];
 
     try {
       const products: any[] = await this.validateProduct(productsIds);
@@ -48,36 +52,28 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
         return acc + orderItem.quantity;
       }, 0);
 
-      const order = await this.order.create({
-        data: {
-          totalAmount,
-          totalItems,
-          OrderItem: {
-            createMany: {
-              data: items.map((orderItem) => ({
-                productId: orderItem.productId,
-                quantity: orderItem.quantity,
-                price: products.find(
-                  (product) => product.id === orderItem.productId,
-                ).price,
-              })),
-            },
-          },
-        },
-        include: {
-          OrderItem: {
-            select: {
-              price: true,
-              quantity: true,
-              productId: true,
-            },
-          },
-        },
+      const order = this.orderRepository.create({
+        totalAmount,
+        totalItems,
       });
+      await this.orderRepository.save(order);
+
+      const data = items.map((orderItem) => ({
+        orderId: order.id,
+        productId: orderItem.productId,
+        quantity: orderItem.quantity,
+        price: products.find((product) => product.id === orderItem.productId)
+          .price,
+      }));
+
+      data.forEach ( productItem => {
+        orderItems.push(this.orderItemRepository.create(productItem));
+      })
+      await this.orderItemRepository.save(orderItems);
 
       return {
         ...order,
-        OrderItem: order.OrderItem.map((orderItem) => ({
+        OrderItem: orderItems.map((orderItem) => ({
           ...orderItem,
           name: products.find((product) => product.id === orderItem.productId)
             .name,
@@ -94,36 +90,37 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
 
   async findAll(orderPaginationDto: OrderPaginationDto) {
     const { limit, page, status } = orderPaginationDto;
-    const totalPage = await this.order.count({ where: { status } });
-    const lastPage = Math.ceil(totalPage / limit);
+    const data = await this.orderRepository.find({
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    const lastPage = Math.ceil(data.length / limit);
 
     return {
-      data: await this.order.findMany({
-        where: { status },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
+      data,
       meta: {
-        total: totalPage,
+        total: data.length,
         page,
         lastPage,
       },
     };
   }
 
-  async findAllByStatus(orderPaginationDto: OrderPaginationDto) {
+ async findAllByStatus(orderPaginationDto: OrderPaginationDto) {
     const { limit, page, status } = orderPaginationDto;
-    const totalPage = await this.order.count({ where: { status } });
-    const lastPage = Math.ceil(totalPage / limit);
+    const data = await this.orderRepository.find({
+      where: { status },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    const lastPage = Math.ceil(data.length / limit);
 
     return {
-      data: await this.order.findMany({
-        where: { status },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
+      data,
       meta: {
-        total: totalPage,
+        total: data.length,
         page,
         lastPage,
       },
@@ -131,18 +128,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   }
 
   async findOne(id: string) {
-    const order = await this.order.findUnique({
-      where: { id },
-      include: {
-        OrderItem: {
-          select: {
-            price: true,
-            quantity: true,
-            productId: true,
-          },
-        },
-      },
-    });
+    const order:Order = await this.orderRepository.findOneBy({id});
 
     if (!order) {
       throw new RpcException({
@@ -151,13 +137,14 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       });
     }
 
-    const productsId = order.OrderItem.map((item) => item.productId);
+    const productsId = order.orderItems.map((item) => item.productId);
 
     const products = await this.validateProduct(productsId);
 
+    const { orderItems, ...rest} = order;
     return {
-      ...order,
-      OrderItem: order.OrderItem.map((orderItem) => ({
+      ...rest,
+      orderItems: orderItems.map((orderItem) => ({
         ...orderItem,
         name: products.find((product) => product.id === orderItem.productId)
           .name,
@@ -168,19 +155,29 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   async changeOrdesStatus(changeOrderDto: ChangeOrderDto) {
     const { id, status } = changeOrderDto;
 
-    const order = await this.findOne(id);
+    const order: Order = await this.findOne(id);
 
     if (order.status === status) return order;
 
-    const updateOrder = await this.order.update({
-      where: { id: order.id },
-      data: { status },
-    });
-
-    return updateOrder;
+    const updateOrder: Order = {
+      ...order,
+      status,
+      updatedAt: new Date(),
+    }
+    
+    try {
+      const orderSaved = await this.orderRepository.save(updateOrder);
+      return orderSaved;
+    } catch (error) {
+      this.logger.error(error.message);
+      throw new RpcException({
+        status: HttpStatus.BAD_REQUEST,
+        message: 'check logs',
+      });
+    }
   }
 
-  async createPaymentSession(order: OrderWithProducts) {
+   async createPaymentSession(order: OrderWithProducts) {
     try {
       const paymentSession = await firstValueFrom(
         this.client.send(Payments.CREATE_PAYMENT_SESSION, {
@@ -204,22 +201,27 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   }
 
   async paidOrder(paidOrderDto: PaidOrderDto) {
-    await this.order.update({
-      where: { id: paidOrderDto.orderId },
-      data: {
-        status: 'PAID',
-        paid: true,
-        paidAt: new Date(),
-        stripeChargeId: paidOrderDto.stripePaymentId,
+    const { orderId, stripePaymentId, receiptUrl } = paidOrderDto;
 
-        // La relación
-        OrderReceipt: {
-          create: {
-            receiptUrl: paidOrderDto.receiptUrl,
-          },
-        },
-      },
-    });
+    const order: Order = await this.findOne(orderId);
+
+    const updateOrder: Order = {
+      ...order,
+      status: OrderStatus.PAID,
+      paid: true,
+      paidAt: new Date(),
+      updatedAt: new Date(),
+      stripeChargeId: stripePaymentId,
+    }
+    await this.orderRepository.save(updateOrder);
+
+    const orderReceipt = this.orderReceiptRepository.create({
+      orderId: updateOrder.id,
+      receiptUrl
+    })
+
+    await this.orderReceiptRepository.save(orderReceipt);
+  
   }
 
   private async validateProduct(ids: number[]) {
